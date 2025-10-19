@@ -188,6 +188,11 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                   ),
                 ],
               ),
+              IconButton(
+                icon: const Icon(Icons.create_new_folder),
+                onPressed: () => _showCreateFolderDialog(context, provider),
+                tooltip: 'Create Folder',
+              ),
             ],
           ],
         ),
@@ -198,10 +203,6 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                 : provider.viewMode == ViewMode.list
                     ? _buildListView(provider)
                     : _buildGridView(provider),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () => _showCreateFolderDialog(context, provider),
-          child: const Icon(Icons.create_new_folder),
-        ),
       ),
     );
   }

@@ -1,6 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:open_filex/open_filex.dart';
 import '../providers/file_manager_provider.dart';
 import '../utils/permission_helper.dart';
 import 'file_browser_screen.dart';
@@ -139,18 +141,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const FileBrowserScreen(),
-            ),
-          );
-        },
-        icon: const Icon(Icons.folder),
-        label: const Text('Browse Files'),
-      ),
     );
   }
 
@@ -256,6 +246,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildQuickAccessGrid(BuildContext context) {
     final items = [
       _QuickAccessItem(
+        icon: Icons.folder_open,
+        label: 'Browse Files',
+        color: Colors.green,
+        path: '/storage/emulated/0',
+      ),
+      _QuickAccessItem(
         icon: Icons.download,
         label: 'Downloads',
         color: Colors.blue,
@@ -272,12 +268,6 @@ class _HomeScreenState extends State<HomeScreen> {
         label: 'Documents',
         color: Colors.orange,
         path: '/storage/emulated/0/Documents',
-      ),
-      _QuickAccessItem(
-        icon: Icons.music_note,
-        label: 'Music',
-        color: Colors.pink,
-        path: '/storage/emulated/0/Music',
       ),
     ];
 
@@ -302,14 +292,42 @@ class _HomeScreenState extends State<HomeScreen> {
     return Card(
       elevation: 1,
       child: InkWell(
-        onTap: () {
-          context.read<FileManagerProvider>().navigateToDirectory(item.path);
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const FileBrowserScreen(),
-            ),
-          );
+        onTap: () async {
+          final provider = context.read<FileManagerProvider>();
+          
+          // Check if directory exists
+          try {
+            final dir = Directory(item.path);
+            if (await dir.exists()) {
+              provider.navigateToDirectory(item.path);
+              if (context.mounted) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const FileBrowserScreen(),
+                  ),
+                );
+              }
+            } else {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('${item.label} folder not found'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            }
+          } catch (e) {
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Cannot access folder'),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+          }
         },
         borderRadius: BorderRadius.circular(12),
         child: Padding(
@@ -398,13 +416,7 @@ class _HomeScreenState extends State<HomeScreen> {
       elevation: 1,
       child: InkWell(
         onTap: () {
-          // TODO: Implement category filtering
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('${category.label} filter coming soon!'),
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
+          _showCategoryFiles(context, category);
         },
         borderRadius: BorderRadius.circular(12),
         child: Column(
@@ -425,6 +437,28 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showCategoryFiles(BuildContext context, _CategoryItem category) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.9,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (context, scrollController) {
+          return CategoryFilesView(
+            category: category,
+            scrollController: scrollController,
+          );
+        },
       ),
     );
   }
@@ -472,6 +506,237 @@ class _CategoryItem {
   });
 }
 
+class CategoryFilesView extends StatefulWidget {
+  final _CategoryItem category;
+  final ScrollController scrollController;
 
+  const CategoryFilesView({
+    super.key,
+    required this.category,
+    required this.scrollController,
+  });
 
+  @override
+  State<CategoryFilesView> createState() => _CategoryFilesViewState();
+}
 
+class _CategoryFilesViewState extends State<CategoryFilesView> {
+  List<FileSystemEntity> _files = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _scanForFiles();
+  }
+
+  Future<void> _scanForFiles() async {
+    setState(() => _isLoading = true);
+    
+    final List<FileSystemEntity> foundFiles = [];
+    
+    try {
+      // Scan common directories for files with matching extensions
+      final basePath = '/storage/emulated/0';
+      final searchDirs = [
+        '$basePath/Download',
+        '$basePath/DCIM',
+        '$basePath/Pictures',
+        '$basePath/Documents',
+        '$basePath/Music',
+        '$basePath/Movies',
+        '$basePath/Downloads',
+      ];
+
+      for (final dirPath in searchDirs) {
+        try {
+          final dir = Directory(dirPath);
+          if (await dir.exists()) {
+            await for (final entity in dir.list(recursive: true)) {
+              if (entity is File) {
+                final ext = entity.path.split('.').last.toLowerCase();
+                if (widget.category.extensions.contains(ext)) {
+                  foundFiles.add(entity);
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Skip directories we can't access
+        }
+      }
+    } catch (e) {
+      // Error scanning
+    }
+
+    if (mounted) {
+      setState(() {
+        _files = foundFiles;
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        children: [
+          // Handle bar
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          
+          // Header
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8),
+            child: Row(
+              children: [
+                FaIcon(
+                  widget.category.icon,
+                  color: widget.category.color,
+                  size: 32,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.category.label,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                      ),
+                      Text(
+                        _isLoading
+                            ? 'Scanning...'
+                            : '${_files.length} file${_files.length != 1 ? 's' : ''} found',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          
+          const Divider(height: 1),
+          
+          // File list
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _files.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.inbox_outlined,
+                              size: 80,
+                              color: Colors.grey[400],
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No ${widget.category.label.toLowerCase()} found',
+                              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    color: Colors.grey[600],
+                                  ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: widget.scrollController,
+                        itemCount: _files.length,
+                        itemBuilder: (context, index) {
+                          final file = _files[index];
+                          final fileName = file.path.split('/').last;
+                          final fileStat = file.statSync();
+                          
+                          return ListTile(
+                            leading: Icon(
+                              _getFileIcon(fileName),
+                              color: widget.category.color,
+                              size: 32,
+                            ),
+                            title: Text(
+                              fileName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              _formatSize(fileStat.size),
+                              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                            ),
+                            trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                            onTap: () async {
+                              // Open file
+                              try {
+                                await OpenFilex.open(file.path);
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Cannot open file'),
+                                      behavior: SnackBarBehavior.floating,
+                                    ),
+                                  );
+                                }
+                              }
+                            },
+                          );
+                        },
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData _getFileIcon(String fileName) {
+    final ext = fileName.split('.').last.toLowerCase();
+    
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].contains(ext)) {
+      return Icons.image;
+    } else if (['mp4', 'avi', 'mkv', 'mov'].contains(ext)) {
+      return Icons.video_file;
+    } else if (['mp3', 'wav', 'aac'].contains(ext)) {
+      return Icons.audio_file;
+    } else if (ext == 'pdf') {
+      return Icons.picture_as_pdf;
+    } else if (['doc', 'docx', 'txt'].contains(ext)) {
+      return Icons.description;
+    } else if (['zip', 'rar', '7z'].contains(ext)) {
+      return Icons.folder_zip;
+    } else if (ext == 'apk') {
+      return Icons.android;
+    }
+    
+    return Icons.insert_drive_file;
+  }
+
+  String _formatSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(2)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+}
